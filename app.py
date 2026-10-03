@@ -1,4 +1,4 @@
-"""SecureCare Claims Assistant: Streamlit entry point.
+"""SecureCare Claims Assistant by Supersek Labs: Streamlit entry point.
 
 Run locally:   streamlit run app.py
 Deploy:        Streamlit Community Cloud -> main file path: app.py
