@@ -74,7 +74,7 @@ EXTRA_FIELD_REGISTRY: List[ExtraField] = [
         "options": ["general", "semi_private", "single_ac"], "required": True, "condition": None,
     },
     {
-        "name": "is_network_hospital", "label": "Is the hospital in SecureCare's network?",
+        "name": "is_network_hospital", "label": "Is the hospital in SekureCare's network?",
         "kind": "select", "options": ["yes", "no"], "required": True, "condition": None,
     },
     {

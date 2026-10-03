@@ -23,7 +23,7 @@ class Communications(BaseModel):
     claimant_letter: str = Field(description="Max 150 words, polite letter to the claimant")
 
 
-SYSTEM_PROMPT = """You are a claims assistant at SecureCare Health Insurance.
+SYSTEM_PROMPT = """You are a claims assistant at SekureCare Health Insurance.
 Write two short texts from the FACTS JSON you are given.
 
 Rules:
@@ -100,12 +100,12 @@ def template_communications(state: Dict[str, Any]) -> Communications:
     if state.get("status") == "rejected":
         letter = (
             f"Dear {name},\n\nWe could not take claim {facts['claim_id']} forward: {reasons}. "
-            "Please contact SecureCare support if you believe this is a mistake.\n\nSecureCare Claims Team"
+            "Please contact SekureCare support if you believe this is a mistake.\n\nSekureCare Claims Team"
         )
     else:
         letter = (
             f"Dear {name},\n\nWe have registered your claim {facts['claim_id']}. "
             f"The estimated payable amount is {facts['payable_estimate_text']}, subject to officer review. "
-            f"Documents still needed: {missing}.\n\nSecureCare Claims Team"
+            f"Documents still needed: {missing}.\n\nSekureCare Claims Team"
         )
     return Communications(officer_summary=summary, claimant_letter=letter)

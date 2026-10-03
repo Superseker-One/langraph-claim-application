@@ -1,4 +1,4 @@
-# SecureCare Claims Assistant (beta)
+# SekureCare Claims Assistant (beta)
 
 A Streamlit app for **health-insurance reimbursement claim intake**, powered by a **LangGraph** workflow.
 Built as the class project for the *FDE LangGraph* sessions: collect → validate → run the graph → deploy.
@@ -97,7 +97,7 @@ pytest
 
 1. **Push to GitHub**
    ```bash
-   git init && git add . && git commit -m "SecureCare claims assistant (beta)"
+   git init && git add . && git commit -m "SekureCare claims assistant (beta)"
    git branch -M main
    git remote add origin https://github.com/<you>/securecare-claims.git
    git push -u origin main
