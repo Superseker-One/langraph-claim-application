@@ -13,23 +13,59 @@ import streamlit as st
 from securecare.agents.llm import build_llm
 from securecare.config import APP_TAGLINE, APP_TITLE
 from securecare.graph import build_claim_graph, build_initial_state, run_claim
-from securecare.security import looks_like_openrouter_key, redact_secrets
+from securecare.security import describe_exception, looks_like_openrouter_key
 from securecare.ui.autofill import render_autofill
 from securecare.ui.form import load_sample, render_claim_form, reset_form
+from securecare.ui.limits import ai_blocked_message, record_ai_call
 from securecare.ui.results import render_result
+from securecare.ui.safe import set_flash, show_flash
 from securecare.ui.sidebar import flush_key_after_use, get_api_key, render_sidebar
 from securecare.ui.workflow_tab import render_about_tab, render_workflow_tab
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🏥", layout="wide")
+
+
+def submit_claim(result, settings) -> None:
+    """Run the workflow for a validated form and ALWAYS end with a rerun, so the key widget that the caller
+    wipes in its `finally` is also dropped by the browser. Outcomes (success, notice, error) travel as a
+    flash banner whose text is escaped by ui/safe.py."""
+    if not result.ok:
+        set_flash("error", f"Please fix {len(result.errors)} highlighted field(s) before submitting.")
+        st.rerun()
+
+    llm = graph = notice = None
+    api_key = ""
+    outcome = ("success", "Claim processed. Scroll down for the result.")
+    try:
+        api_key = get_api_key()
+        if api_key and not looks_like_openrouter_key(api_key):
+            notice = "The key you entered does not look like an OpenRouter key, so AI drafting was skipped."
+        elif api_key and (blocked := ai_blocked_message()):
+            notice = f"{blocked} AI drafting was skipped."
+        elif api_key:
+            record_ai_call()
+            llm = build_llm(api_key, settings.model)            # fresh client, never cached; built INSIDE the try
+        graph = build_claim_graph(llm)
+        with st.spinner("Running the claim workflow…"):
+            run = run_claim(graph, build_initial_state(result.submission, use_llm=llm is not None))
+        st.session_state["last_run"] = run
+        if notice:
+            outcome = ("warning", notice)
+    except Exception as exc:  # noqa: BLE001
+        outcome = ("error", "Workflow error: " + describe_exception(exc, api_key))
+    finally:
+        llm = graph = None
+        api_key = ""                                            # drop our reference to the secret
+    set_flash(*outcome)
+    st.rerun()
+
 
 settings = render_sidebar()
 
 st.title(f"🏥 {APP_TITLE}")
 st.caption(APP_TAGLINE)
 
-flash = st.session_state.pop("flash", None)
-if flash:
-    getattr(st, flash["kind"])(flash["text"])
+show_flash()
 
 tab_claim, tab_graph, tab_about = st.tabs(["📝 New Claim", "🧭 Workflow graph", "ℹ️ About & demo data"])
 
@@ -45,35 +81,10 @@ with tab_claim:
     st.divider()
     if st.button("Submit claim", type="primary"):
         st.session_state["show_all_errors"] = True
-        if not result.ok:
-            st.session_state["flash"] = {"kind": "error", "text":
-                                         f"Please fix {len(result.errors)} highlighted field(s) before submitting."}
-            st.rerun()
-        else:
-            llm, notice = None, None
-            api_key = get_api_key()
-            if api_key and looks_like_openrouter_key(api_key):
-                llm = build_llm(api_key, settings.model)        # fresh client, never cached
-            elif api_key:
-                notice = "The key you entered does not look like an OpenRouter key, so AI drafting was skipped."
-            api_key = ""                                        # drop our reference to the secret
-
-            try:
-                graph = build_claim_graph(llm)
-                with st.spinner("Running the claim workflow…"):
-                    run = run_claim(graph, build_initial_state(result.submission, use_llm=llm is not None))
-                st.session_state["last_run"] = run
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Workflow error: {redact_secrets(f'{type(exc).__name__}: {exc}')[:250]}")
-                run = None
-            finally:
-                llm = graph = None
-                flush_key_after_use(settings)                   # wipe the key widget after use
-
-            if run is not None:
-                st.session_state["flash"] = {"kind": "warning" if notice else "success",
-                                             "text": notice or "Claim processed. Scroll down for the result."}
-                st.rerun()
+        try:
+            submit_claim(result, settings)
+        finally:
+            flush_key_after_use(settings)                       # wipe the key widget on EVERY path
 
     if "last_run" in st.session_state:
         render_result(st.session_state["last_run"])

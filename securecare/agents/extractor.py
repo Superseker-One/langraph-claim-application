@@ -9,6 +9,9 @@ from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field
 
+from securecare.config import MAX_FREE_TEXT_CHARS
+from securecare.textsafe import clean_block
+
 
 class ExtractedBillItem(BaseModel):
     category: str = Field(description="one of: room, surgery, pharmacy, diagnostics, other")
@@ -46,5 +49,6 @@ SYSTEM_PROMPT = (
 def extract_claim_from_text(llm: Any, text: str) -> ClaimExtraction:
     """`llm` is any LangChain chat model that supports with_structured_output."""
     structured = llm.with_structured_output(ClaimExtraction)
+    text = clean_block(text, MAX_FREE_TEXT_CHARS)          # no control/surrogate characters, bounded size
     result = structured.invoke([("system", SYSTEM_PROMPT), ("human", text)])
     return result if isinstance(result, ClaimExtraction) else ClaimExtraction.model_validate(result)

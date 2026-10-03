@@ -2,40 +2,77 @@
 
 Mirrors the 'business schema' from the notebooks:
     static sections   -> ClaimantIn, HospitalizationIn
-    conditional       -> PatientIn (if not 'self'), AccidentIn (if accident)
+    conditional       -> PatientIn (if not 'self'), AccidentIn (if accident)  [enforced by ClaimSubmission]
     dynamic (1..N)    -> BillItemIn list
     extensible        -> extra_fields dict (rules live in config.EXTRA_FIELD_REGISTRY)
 
 Validation messages are written for end users: they are shown next to the form field.
+Every free-text value is cleaned first (NFKC, no control/zero-width/bidi characters, one line) and
+length limits are enforced AFTER cleaning. Digits are ASCII-only ([0-9], never \\d).
 """
 from __future__ import annotations
 
 import re
-from datetime import date, timedelta
-from typing import Dict, List, Literal, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator,
+)
+from pydantic_core import InitErrorDetails, PydanticCustomError
 
 from securecare.config import (
-    DOCUMENT_LABELS, MAX_BILL_AMOUNT, MAX_BILL_ITEMS, MAX_STAY_DAYS,
+    DOCUMENT_LABELS, EXTRA_FIELD_REGISTRY, MAX_BILL_AMOUNT, MAX_BILL_ITEMS, MAX_EXTRA_VALUE_CHARS, MAX_STAY_DAYS,
+    ExtraField, active_extra_fields,
 )
+from securecare.textsafe import clean_line
 
-NAME_RE = re.compile(r"^[A-Za-z][A-Za-z .'\-]{1,59}$")
-CITY_RE = re.compile(r"^[A-Za-z][A-Za-z .'\-]{1,49}$")
-MOBILE_RE = re.compile(r"^[6-9]\d{9}$")
-EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
-PINCODE_RE = re.compile(r"^[1-9]\d{5}$")
-POLICY_RE = re.compile(r"^POL-\d{6}$")
-BILL_NO_RE = re.compile(r"^[A-Z0-9][A-Z0-9/\-]{2,19}$")
-ACCIDENT_REF_RE = re.compile(r"^(MLC|FIR)-\d{4}-\d{3,6}$")
+_WORD = r"[A-Za-z]+(?:['\-][A-Za-z]+)*\.?"
+NAME_RE = re.compile(rf"^{_WORD}(?: {_WORD}){{0,4}}\Z")        # up to 5 words
+CITY_RE = re.compile(rf"^{_WORD}(?: {_WORD}){{0,3}}\Z")        # up to 4 words
+MOBILE_RE = re.compile(r"^[6-9][0-9]{9}\Z")
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\Z")
+EMAIL_MAX_CHARS = 254
+PINCODE_RE = re.compile(r"^[1-9][0-9]{5}\Z")
+POLICY_RE = re.compile(r"^POL-[0-9]{6}\Z")
+BILL_NO_RE = re.compile(r"^[A-Z0-9][A-Z0-9/\-]{2,19}\Z")
+ACCIDENT_REF_RE = re.compile(r"^(MLC|FIR)-([0-9]{4})-[0-9]{3,6}\Z")
+_IST = timezone(timedelta(hours=5, minutes=30))
+_MAX_DOT_ABBREVIATION = 4      # 'Dr.', 'Md.', 'K.' are fine; 'Rajesh. Great news ...' is not a name
 
 
 def _today() -> date:  # separate function so tests can monkeypatch "today"
-    return date.today()
+    """Today in India (IST, UTC+5:30). Streamlit Cloud runs in UTC, so date.today() would be a day behind
+    for Indian users between 00:00 and 05:30; a fixed offset needs no tz database."""
+    return datetime.now(_IST).date()
+
+
+def _words_ok(value: str, pattern: "re.Pattern[str]", min_len: int, max_len: int) -> bool:
+    """Letters only, few words, and a '.' only after a short abbreviation (so a name cannot hold sentences)."""
+    if not (min_len <= len(value) <= max_len) or not pattern.match(value):
+        return False
+    return all(len(w.rstrip(".")) <= _MAX_DOT_ABBREVIATION for w in value.split(" ") if w.endswith("."))
+
+
+def is_person_name(value: str) -> bool:
+    return _words_ok(value, NAME_RE, 2, 60)
+
+
+def normalise_extra_value(spec: ExtraField, value: object) -> str:
+    """Clean an extensible-field value; text fields are upper-cased (their patterns are upper-case)."""
+    cleaned = clean_line(value)
+    return cleaned.upper() if spec.get("kind") == "text" else cleaned
 
 
 class _Section(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _clean_free_text(cls, v: Any) -> Any:
+        """Shared first step for every string field: strip control/zero-width/bidi chars, collapse
+        whitespace. Runs BEFORE min_length/max_length, so a 'blank' zero-width value is empty."""
+        return clean_line(v) if isinstance(v, str) else v
 
 
 # ------------------------------------------------------------------ static sections
@@ -43,22 +80,22 @@ class ClaimantIn(_Section):
     name: str
     relationship: Literal["self", "spouse", "child", "parent", "other"]
     mobile: str
-    email: str
+    email: str = Field(max_length=EMAIL_MAX_CHARS)
     city: str
     pincode: str
 
     @field_validator("name")
     @classmethod
     def _name(cls, v: str) -> str:
-        if not NAME_RE.match(v):
-            raise ValueError("Use 2-60 letters (spaces, . ' - allowed). No digits.")
+        if not is_person_name(v):
+            raise ValueError("Use a real name: 2-60 letters, up to 5 words. No digits or sentences.")
         return v
 
     @field_validator("mobile", mode="before")
     @classmethod
     def _mobile(cls, v):
         if isinstance(v, str):
-            v = re.sub(r"[\s\-]", "", v)
+            v = re.sub(r"[\s\-]", "", clean_line(v))
             if v.startswith("+91"):
                 v = v[3:]
         if not isinstance(v, str) or not MOBILE_RE.match(v):
@@ -75,7 +112,7 @@ class ClaimantIn(_Section):
     @field_validator("city")
     @classmethod
     def _city(cls, v: str) -> str:
-        if not CITY_RE.match(v):
+        if not _words_ok(v, CITY_RE, 2, 50):
             raise ValueError("Enter a valid city name (letters only).")
         return v
 
@@ -126,8 +163,8 @@ class PatientIn(_Section):
     @field_validator("name")
     @classmethod
     def _name(cls, v: str) -> str:
-        if not NAME_RE.match(v):
-            raise ValueError("Use 2-60 letters (spaces, . ' - allowed). No digits.")
+        if not is_person_name(v):
+            raise ValueError("Use a real name: 2-60 letters, up to 5 words. No digits or sentences.")
         return v
 
     @field_validator("dob")
@@ -150,7 +187,7 @@ class AccidentIn(_Section):
     def _ref(cls, v: str) -> str:
         v = v.upper()
         if not ACCIDENT_REF_RE.match(v):
-            raise ValueError("Use the format MLC-2026-4471 or FIR-2026-1234.")
+            raise ValueError(f"Use the format MLC-{_today().year}-4471 or FIR-{_today().year}-1234.")
         return v
 
 
@@ -181,6 +218,10 @@ class BillItemIn(_Section):
 
 
 # ------------------------------------------------------------------ the complete submission
+def _section_error(error_type: str, message: str, loc: tuple, value: Any = None) -> InitErrorDetails:
+    return InitErrorDetails(type=PydanticCustomError(error_type, message), loc=loc, input=value)
+
+
 class ClaimSubmission(_Section):
     claimant: ClaimantIn
     patient: Optional[PatientIn] = None
@@ -205,8 +246,21 @@ class ClaimSubmission(_Section):
     def _docs(cls, v: List[str]) -> List[str]:
         unknown = [d for d in v if d not in DOCUMENT_LABELS]
         if unknown:
-            raise ValueError(f"Unknown document type: {', '.join(unknown)}")
+            raise ValueError("Unknown document type selected.")
         return v
+
+    @field_validator("extra_fields")
+    @classmethod
+    def _extras(cls, v: Dict[str, str]) -> Dict[str, str]:
+        """Only registry keys, cleaned and normalised, short; values of inactive conditional fields are dropped."""
+        specs = {f["name"]: f for f in EXTRA_FIELD_REGISTRY}
+        if any(k not in specs for k in v):
+            raise ValueError("Unknown additional field.")
+        cleaned = {k: normalise_extra_value(specs[k], val) for k, val in v.items()}
+        if any(len(val) > MAX_EXTRA_VALUE_CHARS for val in cleaned.values()):
+            raise ValueError(f"Additional details can be at most {MAX_EXTRA_VALUE_CHARS} characters.")
+        active = {f["name"] for f in active_extra_fields(cleaned)}
+        return {k: val for k, val in cleaned.items() if k in active}
 
     @field_validator("declaration")
     @classmethod
@@ -214,3 +268,31 @@ class ClaimSubmission(_Section):
         if v is not True:
             raise ValueError("You must accept the declaration to submit.")
         return v
+
+    @model_validator(mode="after")
+    def _conditional_sections(self) -> "ClaimSubmission":
+        """The conditional sections are MANDATORY when their condition holds (not just optional extras)."""
+        errors: List[InitErrorDetails] = []
+        adm = self.hospitalization.admission_date
+        if self.hospitalization.is_accident and self.accident is None:
+            errors.append(_section_error(
+                "accident_required", "Accident details (MLC / FIR number and place) are required for accident claims.",
+                ("accident", "mlc_number")))
+        if self.claimant.relationship != "self" and self.patient is None:
+            errors.append(_section_error(
+                "patient_required", "Patient details are required when the claimant is not the patient.",
+                ("patient", "name")))
+        if self.patient is not None and self.patient.dob > adm:
+            errors.append(_section_error(
+                "dob_after_admission", "Patient date of birth cannot be after the admission date.",
+                ("patient", "dob"), self.patient.dob))
+        if self.accident is not None:
+            year = int(ACCIDENT_REF_RE.match(self.accident.mlc_number).group(2))   # format already validated
+            if not (adm.year <= year <= _today().year):
+                allowed = str(adm.year) if adm.year == _today().year else f"{adm.year} to {_today().year}"
+                errors.append(_section_error(
+                    "mlc_year_implausible", f"The year in the MLC / FIR number should be {allowed}.",
+                    ("accident", "mlc_number"), self.accident.mlc_number))
+        if errors:
+            raise ValidationError.from_exception_data(type(self).__name__, errors)
+        return self

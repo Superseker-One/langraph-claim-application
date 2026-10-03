@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 
 from securecare.graph import build_claim_graph, build_initial_state, run_claim
 from securecare.samples import sample_raw_claim
@@ -33,7 +33,8 @@ def test_accident_claim_missing_fir_goes_pending_documents():
     assert s["missing_documents"] == ["fir_or_mlc_copy"]
     assert s["status"] == "pending_documents"
     assert any("Accident case" in r for r in s["review_reasons"])
-    assert s["accident_details"]["mlc_number"] == "MLC-2026-4471"
+    adm_year = date.fromisoformat(s["hospitalization"]["admission_date"]).year
+    assert s["accident_details"]["mlc_number"] == f"MLC-{adm_year}-4471"      # sample uses the admission year
 
 
 def test_policy_on_lapsed_status_is_rejected():
@@ -47,7 +48,10 @@ def test_waiting_period_applies_to_illness_but_not_accidents():
     raw = sample_raw_claim(); raw["policy_number"] = "POL-123456"
     assert _run(raw).state["status"] == "rejected"
     raw = sample_raw_claim("accident"); raw["policy_number"] = "POL-123456"
-    assert _run(raw).state["status"] != "rejected"
+    s = _run(raw).state
+    assert s["status"] != "rejected"
+    # ... but the exemption is not silent any more: see tests/test_rules.py for the review reason + audit entry
+    assert any("waiting period" in r for r in s["review_reasons"])
 
 
 def test_copay_and_sum_insured_cap():
@@ -85,7 +89,8 @@ def test_llm_loop_retries_then_accepts(monkeypatch):
         seen.setdefault("feedback", []).append(feedback)
         if len(seen["feedback"]) == 1:
             return Communications(officer_summary="ok", claimant_letter="Your claim is approved!")
-        return Communications(officer_summary="Summary.",
+        # a good draft now has to name the claim id and copy every review reason in the officer summary
+        return Communications(officer_summary=f"Claim {facts['claim_id']}. " + " ".join(facts["review_reasons"]),
                               claimant_letter=f"Claim {facts['claim_id']} estimate {facts['payable_estimate_text']}.")
     monkeypatch.setattr(nodes, "draft_communications", fake_draft)
     run = _run(sample_raw_claim(), llm=object())
