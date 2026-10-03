@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, TypedDict
 
-APP_TITLE = "SecureCare Claims Assistant by Supersek Labs"
+APP_TITLE = "SekureCare Claims Assistant by Supersek Labs"
 APP_TAGLINE = "Beta · reimbursement claim intake powered by LangGraph"
 
 # ----------------------------- choices used by form + schemas -----------------------------
