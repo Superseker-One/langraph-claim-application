@@ -1,0 +1,5 @@
+streamlit>=1.50,<2
+langgraph>=1.0,<2
+langchain-core>=1.0,<2
+langchain-openai>=1.0,<2
+pydantic>=2.7,<3
