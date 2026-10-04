@@ -59,20 +59,20 @@ def render_result(run: RunResult) -> None:
     st.text_area("officer_summary", clean_block(s["officer_summary"]), height=130, label_visibility="collapsed",
                  disabled=True)
 
-    source = ("🤖 AI-drafted and automatically checked. It still needs officer review before anything is sent."
+    source = ("AI-drafted and automatically checked. It still needs officer review before anything is sent."
               if s.get("comms_source") == "llm"
-              else "📄 template text (no AI used). An officer still reviews the claim.")
+              else "Template text (no AI used). An officer still reviews the claim.")
     st.caption(source)
     if s.get("comms_error"):
         st.warning("The AI step failed, so template text was used. (" + safe_text(s["comms_error"], 300) + ")")
 
-    with st.expander("🧭 Workflow trace: which nodes ran"):
+    with st.expander("Workflow trace: which nodes ran"):
         st.dataframe(
             [{"step": t["step"], "node": t["node"], "state keys updated": ", ".join(t["updated"])} for t in run.trace],
             hide_index=True, width="stretch",
         )
         st.code("\n".join(s.get("audit_log", [])), language="text")
-    with st.expander("🔎 Final graph state (JSON)"):
+    with st.expander("Final graph state (JSON)"):
         st.json(s)
     st.download_button("Download claim record (JSON)", json.dumps(s, indent=2, default=str),
                        file_name=f"{s['claim_id']}.json", mime="application/json")

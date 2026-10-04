@@ -174,7 +174,7 @@ def test_submit_ai_budget_falls_back_to_templates_with_a_notice(monkeypatch):
     at = _app()
     _submit_with_key(at)
     assert used == [] and any("AI actions allowed" in w.value for w in at.warning)
-    assert any("template text" in c.value for c in at.caption)
+    assert any("template text" in c.value.lower() for c in at.caption)
 
 
 # ---------------------------------------------------------------- S-4 / S-5 / S-1: result screen

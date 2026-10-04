@@ -8,12 +8,15 @@ This file is only the UI shell. The product logic lives in securecare/:
     securecare/agents/   <- LLM agents used by the graph and the form
     securecare/ui/       <- Streamlit widgets
 """
+from pathlib import Path
+
 import streamlit as st
 
 from securecare.agents.llm import build_llm
 from securecare.config import APP_TAGLINE, APP_TITLE
 from securecare.graph import build_claim_graph, build_initial_state, run_claim
 from securecare.security import describe_exception, looks_like_openrouter_key
+from securecare.ui.brand import apply_brand, render_brand_footer, render_brand_header
 from securecare.ui.autofill import render_autofill
 from securecare.ui.form import load_sample, render_claim_form, reset_form
 from securecare.ui.limits import ai_blocked_message, record_ai_call
@@ -22,7 +25,9 @@ from securecare.ui.safe import set_flash, show_flash
 from securecare.ui.sidebar import flush_key_after_use, get_api_key, render_sidebar
 from securecare.ui.workflow_tab import render_about_tab, render_workflow_tab
 
-st.set_page_config(page_title=APP_TITLE, page_icon="🏥", layout="wide")
+st.set_page_config(page_title=APP_TITLE, page_icon=str(Path(__file__).parent / "assets" / "favicon.png"),
+                   layout="wide")
+apply_brand()                                   # Supersek theme: CSS constants only, never user text
 
 
 def submit_claim(result, settings) -> None:
@@ -62,12 +67,13 @@ def submit_claim(result, settings) -> None:
 
 settings = render_sidebar()
 
-st.title(f"🏥 {APP_TITLE}")
+render_brand_header()
+st.title(APP_TITLE)
 st.caption(APP_TAGLINE)
 
 show_flash()
 
-tab_claim, tab_graph, tab_about = st.tabs(["📝 New Claim", "🧭 Workflow graph", "ℹ️ About & demo data"])
+tab_claim, tab_graph, tab_about = st.tabs(["New claim", "Workflow graph", "About & demo data"])
 
 with tab_claim:
     t1, t2, t3, _ = st.columns([1.1, 1.3, 1, 3])
@@ -94,3 +100,5 @@ with tab_graph:
 
 with tab_about:
     render_about_tab()
+
+render_brand_footer()

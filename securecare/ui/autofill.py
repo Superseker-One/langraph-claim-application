@@ -179,7 +179,7 @@ def apply_extraction(ex: ClaimExtraction) -> int:
 
 
 def render_autofill(settings: Settings) -> None:
-    with st.expander("✨ Autofill from your email (optional, uses AI)"):
+    with st.expander("Autofill from your email (optional, uses AI)"):
         st.caption(
             "Paste the message you would send to the claims desk. We extract the details and pre-fill "
             "the form below. Bill numbers and bill dates are never guessed, so add them yourself. "
