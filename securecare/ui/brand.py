@@ -22,7 +22,6 @@ SUBTLE_TEXT = "#8A8379"
 WARM_ACCENT = "#E2DCC5"
 
 BRAND_DOMAIN = "supersek.com"
-BRAND_TAGLINE = "Deep-Dive Security Consulting"
 
 # Subtle dot-grid texture for the dark background (an SVG pattern, so no CSS gradient is involved).
 _DOT_GRID = (
@@ -62,11 +61,6 @@ _CSS = f"""
   display: inline-block; width: 7px; height: 7px; margin-left: 3px; border-radius: 50%;
   background: var(--ss-primary); box-shadow: 0 0 0 1px var(--ss-mid);
 }}
-.ss-tagline {{
-  font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ss-subtle);
-  padding-left: 14px; border-left: 1px solid var(--ss-surface);
-}}
-@media (max-width: 640px) {{ .ss-tagline {{ border-left: none; padding-left: 0; }} }}
 .ss-logo-sm {{ font-weight: 800; text-transform: uppercase; letter-spacing: -0.01em; color: var(--ss-light); }}
 
 /* ---- typography: uppercase, wide tracking, signature gradient on the big headings */
@@ -132,7 +126,6 @@ hr {{ border-color: var(--ss-surface) !important; }}
 _HEADER = (
     '<div class="ss-brandbar">'
     '<span class="ss-logo">SUPERSEK<span class="ss-dot"></span></span>'
-    f'<span class="ss-tagline">{BRAND_TAGLINE}</span>'
     "</div>"
 )
 
@@ -140,7 +133,6 @@ _FOOTER = (
     '<div class="ss-footer">'
     '<span class="ss-logo-sm">SUPERSEK</span><span class="ss-dot"></span> &nbsp;·&nbsp; '
     f'<a href="https://{BRAND_DOMAIN}" target="_blank" rel="noopener noreferrer">{BRAND_DOMAIN}</a>'
-    f" &nbsp;·&nbsp; {BRAND_TAGLINE}"
     "</div>"
 )
 
