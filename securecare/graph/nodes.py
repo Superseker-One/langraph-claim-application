@@ -7,22 +7,25 @@ keys it changes (partial update). Deterministic nodes hold the business rules; t
 """
 from __future__ import annotations
 
-import random
+import secrets
 from datetime import date, timedelta
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from securecare.agents.communicator import (
     Communications, check_communications, draft_communications, facts_from_state, template_communications,
+    withheld_fields,
 )
 from securecare.config import (
     ACCIDENT_REQUIRED_DOC, ALWAYS_REQUIRED_DOCS, CATEGORY_REQUIRED_DOCS, HIGH_VALUE_THRESHOLD,
-    LONG_STAY_DAYS, MAX_LLM_ATTEMPTS, WAITING_PERIOD_DAYS,
+    LONG_STAY_DAYS, MAX_LLM_ATTEMPTS, OTHER_CATEGORY_REVIEW_PERCENT, WAITING_PERIOD_DAYS,
 )
 from securecare.graph.state import ClaimState
-from securecare.security import redact_secrets
+from securecare.security import describe_exception, secret_from_client
 from securecare.services.policy_store import get_policy
+from securecare.textsafe import clean_block
 
 VALID_STATUSES = {"rejected", "pending_documents", "officer_review", "ready_for_review"}
+MAX_STORED_TEXT_CHARS = 5000      # hard bound on LLM text kept in state (far above the checked caps)
 
 
 def _stay_days(state: ClaimState) -> int:
@@ -32,8 +35,9 @@ def _stay_days(state: ClaimState) -> int:
 
 # ============================================================ 1. intake
 def intake(state: ClaimState) -> Dict[str, Any]:
-    """Open the claim: system-generated id and basic derived facts."""
-    claim_id = f"CLM-{date.today().year}-{random.randint(100000, 999999)}"
+    """Open the claim: system-generated id and basic derived facts. The id comes from the `secrets`
+    module (40 random bits), so ids cannot be guessed or enumerated from a previous one."""
+    claim_id = f"CLM-{date.today().year}-{secrets.token_hex(5).upper()}"
     return {
         "claim_id": claim_id,
         "stay_days": _stay_days(state),
@@ -43,26 +47,41 @@ def intake(state: ClaimState) -> Dict[str, Any]:
 
 # ============================================================ 2. lookup_policy
 def lookup_policy(state: ClaimState) -> Dict[str, Any]:
-    """Fetch the policy from the system of record and apply eligibility rules."""
+    """Fetch the policy from the system of record and apply eligibility rules.
+
+    The accident exemption from the waiting period is self-declared (is_accident) and MLC/FIR numbers are
+    not verified, so it never lets a claim through silently: such claims stay eligible but get an explicit
+    review reason and an audit entry, which routes them to an officer."""
     policy = get_policy(state["policy_number"])
-    issues = []
+    hosp = state["hospitalization"]
+    issues: List[str] = []
+    notes: List[str] = []
     update: Dict[str, Any] = {}
 
     if policy is None:
         issues.append("Policy number not found in the policy system")
     else:
         update["policy"] = policy
-        adm = date.fromisoformat(state["hospitalization"]["admission_date"])
+        adm = date.fromisoformat(hosp["admission_date"])
         start, end = date.fromisoformat(policy["start_date"]), date.fromisoformat(policy["end_date"])
+        inside_waiting = adm < start + timedelta(days=WAITING_PERIOD_DAYS)
         if policy["status"] != "active":
             issues.append(f"Policy status is '{policy['status']}' (premium or renewal pending)")
         elif not (start <= adm <= end):
             issues.append("Admission date is outside the policy period")
-        elif not state["hospitalization"]["is_accident"] and adm < start + timedelta(days=WAITING_PERIOD_DAYS):
+        elif not hosp["is_accident"] and inside_waiting:
             issues.append(f"Admission falls inside the {WAITING_PERIOD_DAYS}-day initial waiting period (accidents are exempt)")
+        elif hosp["is_accident"]:
+            if inside_waiting:
+                notes.append("Accident claim inside the waiting period: verify MLC/FIR before any payment")
+            if hosp.get("admission_type") == "planned":
+                notes.append("Accident claim with a planned admission: verify MLC/FIR and circumstances before any payment")
 
     update["policy_issues"] = issues
     update["audit_log"] = [f"lookup_policy: {'; '.join(issues) if issues else 'eligible'}"]
+    if notes:
+        update["review_reasons"] = notes
+        update["audit_log"] += [f"lookup_policy: accident waiver NOT applied silently ({n})" for n in notes]
     return update
 
 
@@ -99,10 +118,12 @@ def compute_estimate(state: ClaimState) -> Dict[str, Any]:
     room_eligible = min(room_total, policy["room_rent_limit_per_day"] * days)
     room_excess = room_total - room_eligible
 
+    other_total = sum(i["amount"] for i in items if i["category"] == "other")
+
     admissible = total - room_excess
     deductible_applied = min(policy["deductible"], admissible)
     after_deductible = admissible - deductible_applied
-    copay = round(after_deductible * policy["copay_percent"] / 100)
+    copay = (after_deductible * policy["copay_percent"] + 50) // 100     # integer half-up (round() is banker's)
     payable = min(after_deductible - copay, policy["sum_insured"])
 
     update: Dict[str, Any] = {
@@ -114,8 +135,15 @@ def compute_estimate(state: ClaimState) -> Dict[str, Any]:
         "payable_estimate": max(payable, 0),
         "audit_log": [f"compute_estimate: total={total}, payable={max(payable, 0)}"],
     }
+    reasons = []
     if room_excess > 0:
-        update["review_reasons"] = [f"Room rent above policy limit (excess ₹{room_excess:,} not payable)"]
+        reasons.append(f"Room rent above policy limit (excess ₹{room_excess:,} not payable)")
+    if total > 0 and other_total * 100 > total * OTHER_CATEGORY_REVIEW_PERCENT:
+        # room rent is capped per day, "other" is not: a big "other" share may be room bills in disguise
+        reasons.append(f"{other_total * 100 // total}% of the claim is in the 'other' category: "
+                       "check that room rent or other capped charges are not filed there")
+    if reasons:
+        update["review_reasons"] = reasons
     return update
 
 
@@ -141,12 +169,18 @@ def decide_status(state: ClaimState) -> Dict[str, Any]:
     reasons = []
     if state["hospitalization"]["is_accident"]:
         reasons.append("Accident case: verify MLC / FIR details")
-    if state["total_claimed"] > HIGH_VALUE_THRESHOLD:
-        reasons.append(f"High-value claim (above ₹{HIGH_VALUE_THRESHOLD:,})")
+    # '>=' so a claim exactly at the threshold is reviewed. This only sees ONE claim: splitting a large
+    # claim into several smaller ones needs a claims ledger (persistence), which this demo does not have.
+    if state["total_claimed"] >= HIGH_VALUE_THRESHOLD:
+        reasons.append(f"High-value claim (₹{HIGH_VALUE_THRESHOLD:,} or more)")
     if state["stay_days"] > LONG_STAY_DAYS:
         reasons.append(f"Long hospital stay ({state['stay_days']} days)")
     if state.get("extra_fields", {}).get("is_network_hospital") == "no":
         reasons.append("Non-network hospital: reimbursement route")
+    hidden = withheld_fields(state)
+    if hidden:
+        reasons.append(f"Free text in {', '.join(hidden)} looks like an instruction or contains amounts or links: "
+                       "check it manually")
 
     if state["missing_documents"]:
         status = "pending_documents"
@@ -179,12 +213,14 @@ def make_draft_communications(llm: Optional[Any]) -> Callable[[ClaimState], Dict
                     "audit_log": ["draft_communications: no LLM, used template"]}
         try:
             comms = draft_communications(llm, facts_from_state(state), state.get("comms_feedback"))
-            return {"officer_summary": comms.officer_summary, "claimant_letter": comms.claimant_letter,
+            # LLM text is untrusted: strip hidden/control/surrogate characters BEFORE it is stored or checked
+            return {"officer_summary": clean_block(comms.officer_summary, MAX_STORED_TEXT_CHARS),
+                    "claimant_letter": clean_block(comms.claimant_letter, MAX_STORED_TEXT_CHARS),
                     "comms_source": "llm", "comms_attempts": attempts,
                     "audit_log": [f"draft_communications: LLM draft #{attempts}"]}
         except Exception as exc:  # noqa: BLE001 - any LLM/network/auth failure must not crash the claim
             comms = template_communications(state)
-            message = redact_secrets(f"{type(exc).__name__}: {exc}")[:300]
+            message = describe_exception(exc, secret_from_client(llm), max_len=300)
             return {"officer_summary": comms.officer_summary, "claimant_letter": comms.claimant_letter,
                     "comms_source": "template", "comms_attempts": MAX_LLM_ATTEMPTS,
                     "comms_error": message,
@@ -215,14 +251,38 @@ def verify_communications(state: ClaimState) -> Dict[str, Any]:
 
 # ============================================================ 8. final_checks
 def final_checks(state: ClaimState) -> Dict[str, Any]:
-    """Last deterministic safety net before the claim is handed to an officer."""
-    failures = []
-    if state.get("status") not in VALID_STATUSES:
+    """Last deterministic safety net before the claim is handed to an officer. It re-checks the money,
+    the status and the final texts (whatever their source) against each other."""
+    failures: List[str] = []
+    status = state.get("status")
+    amounts = {k: state.get(k, 0) for k in (
+        "total_claimed", "payable_estimate", "admissible_amount", "deductible_applied", "copay_amount",
+        "room_rent_excess")}
+    total, payable = amounts["total_claimed"], amounts["payable_estimate"]
+    missing = state.get("missing_documents", [])
+
+    if status not in VALID_STATUSES:
         failures.append("status is not a known value")
-    if state.get("payable_estimate", 0) > state.get("total_claimed", 0):
+    if any(not isinstance(v, (int, float)) or v < 0 for v in amounts.values()):
+        failures.append("a calculated amount is negative or not a number")
+    elif payable > total:
         failures.append("payable estimate exceeds total claimed")
+    sum_insured = state.get("policy", {}).get("sum_insured")
+    if isinstance(sum_insured, (int, float)) and isinstance(payable, (int, float)) and payable > sum_insured:
+        failures.append("payable estimate exceeds the sum insured")
+    if status == "pending_documents" and not missing:
+        failures.append("status is pending_documents but no document is missing")
+    if missing and status not in ("pending_documents", "rejected"):
+        failures.append("documents are missing but the status is not pending_documents")
+    if status == "rejected" and payable:
+        failures.append("rejected claim has a payable amount")
+    if not state.get("claim_id"):
+        failures.append("claim id is missing")
     if not state.get("claimant_letter") or not state.get("officer_summary"):
         failures.append("communications missing")
+    else:
+        comms = Communications(officer_summary=state["officer_summary"], claimant_letter=state["claimant_letter"])
+        failures.extend(f"communications: {p}" for p in check_communications(comms, state)[:5])
 
     update: Dict[str, Any] = {
         "checks_passed": not failures,

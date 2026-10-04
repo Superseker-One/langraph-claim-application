@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from langchain_openai import ChatOpenAI
 
-from securecare.config import APP_TITLE, DEFAULT_MODEL, LLM_TIMEOUT_SECONDS, OPENROUTER_BASE_URL
+from securecare.config import (
+    APP_TITLE, DEFAULT_MODEL, LLM_MAX_TOKENS, LLM_TIMEOUT_SECONDS, OPENROUTER_BASE_URL,
+)
 
 
 def build_llm(api_key: str, model: str = DEFAULT_MODEL) -> ChatOpenAI:
@@ -21,6 +23,7 @@ def build_llm(api_key: str, model: str = DEFAULT_MODEL) -> ChatOpenAI:
         base_url=OPENROUTER_BASE_URL,
         default_headers={"X-Title": APP_TITLE},       # optional: names the app on OpenRouter's dashboard
         temperature=0,
+        max_tokens=LLM_MAX_TOKENS,                    # caps cost per call (abuse / runaway output)
         timeout=LLM_TIMEOUT_SECONDS,
         max_retries=1,
     )

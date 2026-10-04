@@ -33,16 +33,38 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 MODEL_OPTIONS = ["openai/gpt-4o-mini", "openai/gpt-4.1-mini", "openai/gpt-4.1-nano"]
 DEFAULT_MODEL = MODEL_OPTIONS[0]
 LLM_TIMEOUT_SECONDS = 30
+LLM_MAX_TOKENS = 600          # cost/abuse cap on every completion (letters are ~400 tokens at most)
 MAX_LLM_ATTEMPTS = 2          # bounded retry loop in the graph (draft -> verify -> draft ...)
 MAX_FREE_TEXT_CHARS = 4000    # cap for the "paste your email" autofill
+# Per-session throttle for AI actions (autofill click or AI-drafted submission). Kept in st.session_state
+# and NOT reset by "New claim". It limits accidental/abusive provider calls; it is not authentication.
+MAX_AI_CALLS_PER_SESSION = 10
+MIN_SECONDS_BETWEEN_AI_CALLS = 3
+
+# Length caps for LLM-written text: the stated limits (120 / 150 words) plus slack.
+SUMMARY_MAX_WORDS, SUMMARY_MAX_CHARS = 170, 1500
+LETTER_MAX_WORDS, LETTER_MAX_CHARS = 220, 1800
+MAX_MISSING_INFO_ITEMS = 8    # cap for the extractor's "missing information" list shown in the UI
+MAX_EXTRA_VALUE_CHARS = 40    # cap for every extensible (registry) field value
 
 # ----------------------------- business rules -----------------------------
 MAX_STAY_DAYS = 90
 MAX_BILL_ITEMS = 20
 MAX_BILL_AMOUNT = 5_000_000
-HIGH_VALUE_THRESHOLD = 200_000     # claims above this go to an officer
+HIGH_VALUE_THRESHOLD = 200_000     # claims AT or above this go to an officer
 LONG_STAY_DAYS = 30
-WAITING_PERIOD_DAYS = 30           # initial waiting period (accidents are exempt)
+WAITING_PERIOD_DAYS = 30           # initial waiting period (accidents are exempt, but see lookup_policy)
+# If more than this share of the claim is in the free-form "other" category, an officer checks that room
+# rent (which has a per-day cap) is not being labelled as "other".
+OTHER_CATEGORY_REVIEW_PERCENT = 25
+
+# Max characters per form field. ONE source of truth for the form widgets and the autofill clamp.
+FIELD_LIMITS: Dict[str, int] = {
+    "claimant.name": 60, "claimant.mobile": 16, "claimant.email": 100, "claimant.city": 50,
+    "claimant.pincode": 6, "patient.name": 60, "policy_number": 10,
+    "hospitalization.hospital_name": 100, "hospitalization.diagnosis": 200,
+    "accident.mlc_number": 20, "accident.place": 100, "bill_items.bill_number": 20, "extra": 20,
+}
 
 
 # ----------------------------- document rules (derived requirement) -----------------------------
@@ -79,7 +101,7 @@ EXTRA_FIELD_REGISTRY: List[ExtraField] = [
     },
     {
         "name": "tpa_reference", "label": "TPA reference number", "kind": "text",
-        "required": True, "pattern": r"TPA-\d{4,8}", "pattern_hint": "Format: TPA-7781",
+        "required": True, "pattern": r"TPA-[0-9]{4,8}", "pattern_hint": "Format: TPA-7781",
         "placeholder": "TPA-7781",
         # conditional extensible field: only for network hospitals
         "condition": lambda answers: answers.get("is_network_hospital") == "yes",

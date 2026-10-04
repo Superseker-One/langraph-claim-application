@@ -90,3 +90,53 @@ def test_declaration_and_required_blank_form():
     assert errors["claimant.name"] == "This field is required."
     assert errors["bill_items.1.amount"] == "This field is required."
     assert errors["extra.room_category"] == "This field is required."
+
+
+# ---------------------------------------------------------------- S-3: duplicate-bill detection
+@pytest.mark.parametrize("variant", ["RM1001", "RM/1001", "rm-1001", "RM-01001", "RM-1001 ", "RM-0001001",
+                                     "RM\u200b-1001", "ＲＭ-１００１", "rm/0001001"])
+def test_obfuscated_duplicate_bill_numbers_are_caught(variant):
+    raw = sample_raw_claim()                                    # row 1 is RM-1001
+    raw["bill_items"][1]["bill_number"] = variant
+    errors = validate_submission(raw).errors
+    assert "Duplicate bill number" in errors.get("bill_items.2.bill_number", ""), (variant, errors)
+
+
+@pytest.mark.parametrize("variant", ["RM 1001", "R.M-1001"])
+def test_other_separators_never_slip_through_either(variant):
+    raw = sample_raw_claim()
+    raw["bill_items"][1]["bill_number"] = variant
+    assert "bill_items.2.bill_number" in validate_submission(raw).errors
+
+
+def test_different_bill_numbers_are_not_flagged_by_canonicalisation():
+    from securecare.validation import canonical_bill_number
+    assert canonical_bill_number("RM-1001") == canonical_bill_number("rm/01001") == "RM1001"
+    assert canonical_bill_number("RM-1001") != canonical_bill_number("RM-1010")
+    assert canonical_bill_number("RM-100") != canonical_bill_number("RM-1000")
+    assert validate_submission(sample_raw_claim()).ok
+
+
+def test_identical_bills_with_different_numbers_are_caught_by_category_date_amount():
+    raw = sample_raw_claim()
+    first = raw["bill_items"][0]
+    raw["bill_items"][1].update(category=first["category"], bill_date=first["bill_date"], amount=first["amount"])
+    errors = validate_submission(raw).errors
+    assert "same category, date and amount as bill #1" in errors["bill_items.2.bill_number"]
+    assert "Duplicate" in errors["bill_items.2.bill_number"]          # user-friendly, keyed to the bill number widget
+    assert "bill_items.1.bill_number" not in errors
+
+
+def test_same_amount_on_a_different_date_or_category_is_fine():
+    raw = sample_raw_claim()
+    raw["bill_items"][1].update(amount=raw["bill_items"][0]["amount"])
+    assert validate_submission(raw).ok
+    raw["bill_items"][1].update(category=raw["bill_items"][0]["category"])
+    raw["bill_items"][1]["bill_date"] = raw["hospitalization"]["admission_date"]
+    assert validate_submission(raw).ok
+
+
+def test_unicode_variants_of_the_policy_number_use_the_cleaned_value_in_business_rules():
+    raw = sample_raw_claim()
+    raw["policy_number"] = "POL-999999​"                # cleaned to a not-found policy: rule must still run
+    assert "not found" in validate_submission(raw).errors["policy_number"].lower()

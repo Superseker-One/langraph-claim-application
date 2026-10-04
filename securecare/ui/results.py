@@ -8,6 +8,8 @@ import streamlit as st
 from securecare.config import DOCUMENT_LABELS
 from securecare.formatting import format_inr
 from securecare.graph.runner import RunResult
+from securecare.textsafe import clean_block
+from securecare.ui.safe import safe_text
 
 STATUS_STYLE = {
     "ready_for_review": (st.success, "Ready for officer review"),
@@ -21,7 +23,7 @@ def render_result(run: RunResult) -> None:
     s = run.state
     st.divider()
     st.header(f"Claim {s['claim_id']}")
-    banner, label = STATUS_STYLE.get(s["status"], (st.info, s["status"]))
+    banner, label = STATUS_STYLE.get(s["status"], (st.info, safe_text(s["status"], 40)))
     banner(f"**{label}**")
 
     c1, c2, c3 = st.columns(3)
@@ -44,19 +46,25 @@ def render_result(run: RunResult) -> None:
             )
 
     if s.get("missing_documents"):
-        st.warning("**Documents still needed:** " + ", ".join(DOCUMENT_LABELS[d] for d in s["missing_documents"]))
+        st.warning("**Documents still needed:** "
+                   + ", ".join(DOCUMENT_LABELS.get(d) or safe_text(d, 60) for d in s["missing_documents"]))
     if s.get("review_reasons"):
-        st.markdown("**Why an officer will look at this:**\n" + "\n".join(f"- {r}" for r in s["review_reasons"]))
+        st.markdown("**Why an officer will look at this:**\n"
+                    + "\n".join(f"- {safe_text(r, 300)}" for r in s["review_reasons"]))
 
     st.subheader("Letter to claimant")
-    st.text_area("claimant_letter", s["claimant_letter"], height=190, label_visibility="collapsed", disabled=True)
+    st.text_area("claimant_letter", clean_block(s["claimant_letter"]), height=190, label_visibility="collapsed",
+                 disabled=True)
     st.subheader("Summary for the claims officer")
-    st.text_area("officer_summary", s["officer_summary"], height=130, label_visibility="collapsed", disabled=True)
+    st.text_area("officer_summary", clean_block(s["officer_summary"]), height=130, label_visibility="collapsed",
+                 disabled=True)
 
-    source = "🤖 written by AI and verified by the workflow" if s.get("comms_source") == "llm" else "📄 template text (no AI used)"
+    source = ("🤖 AI-drafted and automatically checked. It still needs officer review before anything is sent."
+              if s.get("comms_source") == "llm"
+              else "📄 template text (no AI used). An officer still reviews the claim.")
     st.caption(source)
     if s.get("comms_error"):
-        st.warning(f"The AI step failed, so template text was used. ({s['comms_error']})")
+        st.warning("The AI step failed, so template text was used. (" + safe_text(s["comms_error"], 300) + ")")
 
     with st.expander("🧭 Workflow trace: which nodes ran"):
         st.dataframe(

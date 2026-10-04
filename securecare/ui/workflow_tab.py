@@ -44,8 +44,8 @@ def render_about_tab() -> None:
     st.markdown(
         """
 - **Deterministic first:** validation, eligibility and money calculations are plain Python inside graph nodes.
-- **AI only for language:** the model extracts details from your email and words the letters. Every AI answer is verified before use.
+- **AI only for language:** the model extracts details from your email and words the letters. AI text is automatically checked (wording, amounts, links) and falls back to a template, but an officer still reviews every claim.
 - **No key, no problem:** without an API key the whole workflow runs and uses template letters.
-- **Demo data only:** do not enter real personal or medical information. Nothing is stored by this app.
+- **Demo data only:** do not enter real personal or medical information. Nothing is stored by this app. With an API key, the name, diagnosis and pasted text go to the AI provider.
 """
     )

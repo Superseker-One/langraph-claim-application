@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 import streamlit as st
 
 from securecare.config import (
-    ADMISSION_TYPES, BILL_CATEGORIES, DOCUMENT_LABELS, EXTRA_FIELD_REGISTRY, GENDERS, MAX_BILL_ITEMS,
+    ADMISSION_TYPES, BILL_CATEGORIES, DOCUMENT_LABELS, EXTRA_FIELD_REGISTRY, FIELD_LIMITS, GENDERS, MAX_BILL_ITEMS,
     RELATIONSHIPS, active_extra_fields,
 )
 from securecare.samples import sample_raw_claim
@@ -137,8 +137,8 @@ def _show_error(errors: Dict[str, str], key: str) -> None:
         st.caption(f":red[⚠️ {msg}]")
 
 
-def _text(label: str, key: str, errors: Dict[str, str], placeholder: str = "", max_chars: int = 120) -> None:
-    st.text_input(label, key=key, placeholder=placeholder, max_chars=max_chars)
+def _text(label: str, key: str, errors: Dict[str, str], placeholder: str = "", max_chars: Optional[int] = None) -> None:
+    st.text_input(label, key=key, placeholder=placeholder, max_chars=max_chars or FIELD_LIMITS.get(key, 120))
     _show_error(errors, key)
 
 
@@ -158,23 +158,28 @@ def render_claim_form() -> ValidationResult:
     result = validate_submission(raw)
     errors = result.errors
 
+    st.info(
+        "**Demo only:** do not enter real personal or medical information. If AI features are on (you entered "
+        "an API key), the name, diagnosis and any text you paste are sent to the AI provider (OpenRouter)."
+    )
+
     # ---------------------------------------------------------------- 1. claimant
     st.subheader("1 · Claimant")
     c1, c2 = st.columns(2)
     with c1:
-        _text("Full name", "claimant.name", errors, "Rajesh Kumar", 60)
-        _text("Mobile number", "claimant.mobile", errors, "9876543210", 16)
-        _text("City", "claimant.city", errors, "Bengaluru", 50)
+        _text("Full name", "claimant.name", errors, "Rajesh Kumar")
+        _text("Mobile number", "claimant.mobile", errors, "9876543210")
+        _text("City", "claimant.city", errors, "Bengaluru")
     with c2:
         _select("Relationship to patient", "claimant.relationship", RELATIONSHIPS, errors)
-        _text("Email", "claimant.email", errors, "name@example.com", 100)
-        _text("Pincode", "claimant.pincode", errors, "560001", 6)
+        _text("Email", "claimant.email", errors, "name@example.com")
+        _text("Pincode", "claimant.pincode", errors, "560001")
 
     if "patient" in raw:                                   # CONDITIONAL section
         st.markdown("**Patient details** (needed because the claimant is not the patient)")
         p1, p2, p3 = st.columns(3)
         with p1:
-            _text("Patient name", "patient.name", errors, max_chars=60)
+            _text("Patient name", "patient.name", errors)
         with p2:
             st.date_input("Patient date of birth", value=None, key="patient.dob", min_value=MIN_DATE,
                           max_value=date.today(), format="DD/MM/YYYY")
@@ -184,14 +189,14 @@ def render_claim_form() -> ValidationResult:
 
     # ---------------------------------------------------------------- 2. policy + hospitalisation
     st.subheader("2 · Policy and hospitalisation")
-    _text("Policy number", "policy_number", errors, "POL-458921", 10)
+    _text("Policy number", "policy_number", errors, "POL-458921")
     h1, h2 = st.columns(2)
     with h1:
         _text("Hospital name", "hospitalization.hospital_name", errors, "City Care Hospital")
         _date("Admission date", "hospitalization.admission_date", errors)
         _select("Admission type", "hospitalization.admission_type", ADMISSION_TYPES, errors)
     with h2:
-        _text("Diagnosis (as on discharge summary)", "hospitalization.diagnosis", errors, "Acute appendicitis", 200)
+        _text("Diagnosis (as on discharge summary)", "hospitalization.diagnosis", errors, "Acute appendicitis")
         _date("Discharge date", "hospitalization.discharge_date", errors)
         st.radio("Was the hospitalisation due to an accident?", ["Yes", "No"], index=None,
                  horizontal=True, key="hospitalization.is_accident")
@@ -201,9 +206,9 @@ def render_claim_form() -> ValidationResult:
         st.markdown("**Accident details** (MLC / FIR is mandatory for accident claims)")
         a1, a2 = st.columns(2)
         with a1:
-            _text("MLC / FIR number", "accident.mlc_number", errors, "MLC-2026-4471", 20)
+            _text("MLC / FIR number", "accident.mlc_number", errors, f"MLC-{date.today().year}-4471")
         with a2:
-            _text("Place of accident", "accident.place", errors, max_chars=100)
+            _text("Place of accident", "accident.place", errors)
 
     # ---------------------------------------------------------------- 3. bills (DYNAMIC 1..N)
     st.subheader("3 · Hospital bills")
@@ -216,7 +221,7 @@ def render_claim_form() -> ValidationResult:
             _show_error(errors, f"bill_items.{rid}.category")
         with b[1]:
             st.text_input(f"Bill number #{position}", key=f"bill_items.{rid}.bill_number", placeholder="RM-1001",
-                          max_chars=20)
+                          max_chars=FIELD_LIMITS["bill_items.bill_number"])
             _show_error(errors, f"bill_items.{rid}.bill_number")
         with b[2]:
             st.date_input(f"Bill date #{position}", value=None, key=f"bill_items.{rid}.bill_date",
@@ -247,14 +252,16 @@ def render_claim_form() -> ValidationResult:
             if spec["kind"] == "select":
                 _select(spec["label"], key, spec["options"], errors)
             else:
-                _text(spec["label"], key, errors, spec.get("placeholder", ""), 20)
+                _text(spec["label"], key, errors, spec.get("placeholder", ""), FIELD_LIMITS["extra"])
         seen[spec["name"]] = st.session_state.get(key)
 
     # ---------------------------------------------------------------- 5. documents + declaration
     st.subheader("5 · Documents and declaration")
-    st.multiselect("Documents you will upload", list(DOCUMENT_LABELS), key="documents",
+    st.multiselect("Documents you have and will submit", list(DOCUMENT_LABELS), key="documents",
                    format_func=lambda d: DOCUMENT_LABELS[d],
-                   help="Missing documents will not block submission. The workflow tells you what is still needed.")
+                   help="Tick the documents you HAVE and will submit. This is self-declared: nothing is uploaded "
+                        "here and a claims officer verifies the actual documents later. Missing documents will not "
+                        "block submission; the workflow tells you what is still needed.")
     st.checkbox("I declare that the information given is true and complete.", key="declaration")
     _show_error(errors, "declaration")
     return result

@@ -36,7 +36,7 @@ def sample_raw_claim(kind: str = "simple", today: Optional[date] = None) -> Dict
         raw["patient"] = {"name": "Aarav Sharma", "dob": date(2015, 5, 12), "gender": "male"}
         raw["hospitalization"].update({"hospital_name": "Sunrise Hospital", "diagnosis": "Fracture of left radius",
                                        "is_accident": True})
-        raw["accident"] = {"mlc_number": "MLC-2026-4471", "place": "School playground"}
+        raw["accident"] = {"mlc_number": f"MLC-{adm.year}-4471", "place": "School playground"}   # year: admission year
         raw["bill_items"] = [
             {"row_id": 1, "category": "room", "bill_number": "RM-5001", "bill_date": dis, "amount": 12000},
             {"row_id": 2, "category": "surgery", "bill_number": "SG-5002", "bill_date": adm, "amount": 95000},

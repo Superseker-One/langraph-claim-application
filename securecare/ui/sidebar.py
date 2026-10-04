@@ -10,8 +10,8 @@ doing one of the things in the 'never' list):
 
   DO     keep the key in a widget bound to st.session_state (one dict per browser session)
   DO     pass it explicitly to the client (api_key=...) for ONE run, then drop the reference
-  DO     flush it afterwards: we rotate the widget's key (nonce), so Streamlit discards the
-         old widget and its value, and the next render shows an empty box
+  DO     flush it afterwards: we rotate the widget's key (nonce) AND delete the old value from
+         session_state, in a `finally`, on every path (success, validation failure, exception)
 """
 from __future__ import annotations
 
@@ -40,12 +40,18 @@ def get_api_key() -> str:
 
 
 def flush_api_key() -> None:
-    """Rotate the widget key: the old widget (and the secret inside it) is discarded."""
+    """Rotate the widget key (the browser discards the old widget) AND delete the old widget's value from
+    session_state right now, so the secret is gone from the server-side session even on error paths where
+    no rerun follows."""
+    old = _widget_name()
     st.session_state["key_nonce"] = st.session_state.get("key_nonce", 0) + 1
+    st.session_state.pop(old, None)
 
 
 def flush_key_after_use(settings: Settings) -> None:
-    if not settings.keep_key:
+    """Wipe the key unless the visitor opted to keep it. Call it from a `finally`. Callers that flush a
+    typed key follow with st.rerun() so the browser also drops the old (still filled) widget."""
+    if not settings.keep_key and get_api_key():
         flush_api_key()
 
 

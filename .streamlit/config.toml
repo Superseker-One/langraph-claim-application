@@ -7,6 +7,8 @@ gatherUsageStats = false
 
 [client]
 toolbarMode = "minimal"
+# Visitors never see Python tracebacks, exception text or server file paths.
+showErrorDetails = "none"
 
 [theme]
 primaryColor = "#1F6FEB"

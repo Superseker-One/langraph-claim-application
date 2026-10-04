@@ -6,6 +6,7 @@ Three layers, in order:
   2. Extra-field registry (config.py)   -> extensible / conditional fields
   3. Business rules vs the policy store -> policy exists, admission inside policy period,
                                            bill dates inside the hospital stay, duplicate bills
+                                           (canonical bill numbers + identical category/date/amount)
 
 Widget keys follow the same dotted paths the UI uses, e.g. 'claimant.mobile',
 'hospitalization.admission_date', 'bill_items.3.amount', 'extra.tpa_reference'.
@@ -19,11 +20,13 @@ from typing import Any, Dict, Optional
 
 from pydantic import ValidationError
 
-from securecare.config import active_extra_fields
-from securecare.schemas import POLICY_RE, ClaimSubmission
+from securecare.config import EXTRA_FIELD_REGISTRY, MAX_EXTRA_VALUE_CHARS, active_extra_fields
+from securecare.schemas import POLICY_RE, ClaimSubmission, normalise_extra_value
 from securecare.services.policy_store import get_policy
+from securecare.textsafe import clean_line
 
 REQUIRED_MSG = "This field is required."
+_SECTION_ERROR_TYPES = {"accident_required", "patient_required"}      # conditional-section rules (schemas.py)
 
 
 @dataclass
@@ -68,32 +71,60 @@ def _map_pydantic_errors(exc: ValidationError, raw: Dict[str, Any]) -> Dict[str,
         loc = tuple(err["loc"])
         key = _widget_key(loc, raw)
         value = _raw_value(raw, loc)
-        if err["type"] == "missing" or value in (None, "", []):
+        blank_after_cleaning = isinstance(value, str) and not clean_line(value)   # e.g. only zero-width chars
+        if err["type"] in _SECTION_ERROR_TYPES:
+            message = _clean_message(err["msg"])
+        elif err["type"] == "missing" or value in (None, "", []) or (
+                err["type"] == "string_too_short" and blank_after_cleaning):
             message = REQUIRED_MSG
+        elif err["type"] == "string_too_short":
+            message = f"Enter at least {err['ctx']['min_length']} characters."
+        elif err["type"] == "string_too_long":
+            message = f"Use at most {err['ctx']['max_length']} characters."
         else:
             message = _clean_message(err["msg"])
         errors.setdefault(key, message)
     return errors
 
 
+def canonical_bill_number(value: Any) -> str:
+    """Bill number as the SAME bill would be written in any style: 'RM-1001', 'RM1001', 'rm/1001' and
+    'RM-01001' all become 'RM1001' (alphanumerics only, upper-case, leading zeros of the number removed)."""
+    compact = re.sub(r"[^A-Z0-9]", "", clean_line(value).upper())
+    return re.sub(r"(?<=[A-Z])0+(?=[0-9])|^0+(?=[0-9])", "", compact)
+
+
+def _bill_signature(item: Dict[str, Any]) -> Optional[tuple]:
+    """(category, date, amount): two bills that agree on all three are treated as the same bill."""
+    category, bill_date, amount = item.get("category"), item.get("bill_date"), item.get("amount")
+    if isinstance(amount, float) and amount.is_integer():
+        amount = int(amount)
+    if category and isinstance(bill_date, date) and isinstance(amount, int) and not isinstance(amount, bool) and amount > 0:
+        return (category, bill_date, amount)
+    return None
+
+
 # ------------------------------------------------------------------ layer 2: extensible fields
 def validate_extras(extras: Dict[str, Any]) -> Dict[str, str]:
     errors: Dict[str, str] = {}
-    for spec in active_extra_fields(extras):
+    specs = {f["name"]: f for f in EXTRA_FIELD_REGISTRY}
+    normalised = {k: normalise_extra_value(specs[k], v) if k in specs else clean_line(v) for k, v in extras.items()}
+    for spec in active_extra_fields(normalised):
         name = spec["name"]
-        value = (extras.get(name) or "").strip()
+        value = normalised.get(name, "")
         key = f"extra.{name}"
         if not value:
             if spec.get("required"):
                 errors[key] = REQUIRED_MSG
             continue
-        if spec["kind"] == "select" and value not in spec.get("options", []):
+        if len(value) > MAX_EXTRA_VALUE_CHARS:
+            errors[key] = f"Use at most {MAX_EXTRA_VALUE_CHARS} characters."
+        elif spec["kind"] == "select" and value not in spec.get("options", []):
             errors[key] = "Choose one of the listed options."
         elif spec["kind"] == "text":
-            candidate = value.upper()
             pattern = spec.get("pattern")
-            allow_na = name == "employer_code" and candidate == "NA"
-            if pattern and not allow_na and not re.fullmatch(pattern, candidate):
+            allow_na = name == "employer_code" and value == "NA"
+            if pattern and not allow_na and not re.fullmatch(pattern, value, flags=re.ASCII):    # ASCII digits only
                 errors[key] = spec.get("pattern_hint", "Invalid format.")
     return errors
 
@@ -104,7 +135,7 @@ def _business_rules(raw: Dict[str, Any]) -> Dict[str, str]:
     hosp = raw.get("hospitalization", {})
     adm, dis = hosp.get("admission_date"), hosp.get("discharge_date")
 
-    policy_number = str(raw.get("policy_number") or "").strip().upper()
+    policy_number = clean_line(raw.get("policy_number")).upper()
     if POLICY_RE.match(policy_number):
         policy = get_policy(policy_number)
         if policy is None:
@@ -116,18 +147,27 @@ def _business_rules(raw: Dict[str, Any]) -> Dict[str, str]:
                     f"Admission date is outside the policy period ({start} to {end})."
                 )
 
-    seen: Dict[str, int] = {}
-    for item in raw.get("bill_items", []):
+    seen_numbers: Dict[str, int] = {}
+    seen_signatures: Dict[tuple, int] = {}
+    for position, item in enumerate(raw.get("bill_items", []), start=1):
         rid = item.get("row_id")
         bill_date = item.get("bill_date")
         if isinstance(bill_date, date) and isinstance(adm, date) and isinstance(dis, date):
             if not (adm <= bill_date <= dis):
                 errors[f"bill_items.{rid}.bill_date"] = "Bill date must fall between admission and discharge dates."
-        number = str(item.get("bill_number") or "").strip().upper()
+        key = f"bill_items.{rid}.bill_number"
+        number = canonical_bill_number(item.get("bill_number"))
         if number:
-            if number in seen:
-                errors[f"bill_items.{rid}.bill_number"] = "Duplicate bill number. Each bill can be claimed once."
-            seen[number] = rid
+            if number in seen_numbers:
+                errors[key] = "Duplicate bill number. Each bill can be claimed once."
+            else:
+                seen_numbers[number] = position
+        signature = _bill_signature(item)
+        if signature:
+            if signature in seen_signatures and key not in errors:
+                errors[key] = (f"Duplicate bill: same category, date and amount as bill #{seen_signatures[signature]}. "
+                               "Each bill can be claimed once.")
+            seen_signatures.setdefault(signature, position)
     return errors
 
 
