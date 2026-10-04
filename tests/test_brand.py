@@ -46,8 +46,8 @@ def test_app_shows_logo_title_and_footer_without_errors():
     at = AppTest.from_file(APP, default_timeout=30).run()
     assert not at.exception and not at.warning
     html = " ".join(m.value for m in at.markdown)
-    assert "ss-logo" in html and "SUPERSEK" in html and "Deep-Dive Security Consulting" in html
-    assert "supersek.com" in html
+    assert "ss-logo" in html and "SUPERSEK" in html and "supersek.com" in html
+    assert "deep-dive" not in html.lower()                         # the consulting tagline is not shown
     assert any("SekureCare" in t.value for t in at.title)
 
 
@@ -73,3 +73,8 @@ def test_favicon_exists_and_is_a_small_png():
     assert icon.is_file()
     with Image.open(icon) as img:
         assert img.format == "PNG" and max(img.size) <= 256
+
+
+def test_consulting_tagline_is_nowhere_in_the_app_source():
+    for path in [ROOT / "app.py", *(ROOT / "securecare").rglob("*.py"), ROOT / ".streamlit" / "config.toml"]:
+        assert "deep-dive security consulting" not in path.read_text().lower(), path
