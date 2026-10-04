@@ -74,7 +74,7 @@ def test_full_flow_without_key_uses_templates():
     _click(at, "Submit claim")
     assert not at.exception
     assert any("Claim CLM-" in h.value for h in at.header)
-    assert any("template text" in c.value for c in at.caption)
+    assert any("template text" in c.value.lower() for c in at.caption)
 
 
 def test_accident_sample_shows_missing_fir_document():

@@ -10,5 +10,21 @@ toolbarMode = "minimal"
 # Visitors never see Python tracebacks, exception text or server file paths.
 showErrorDetails = "none"
 
+# Supersek brand (see securecare/ui/brand.py for the CSS that goes beyond what themes can express).
 [theme]
-primaryColor = "#1F6FEB"
+base = "dark"
+primaryColor = "#7874EA"                  # Mid Purple: visible on the dark background
+backgroundColor = "#1F2223"               # Dark Background
+secondaryBackgroundColor = "#393E40"      # Dark Surface (cards, inputs, panels)
+textColor = "#DCDAD7"                     # Light Text
+linkColor = "#7874EA"
+blueColor = "#7874EA"                      # st.info callouts take the brand purple instead of Streamlit blue
+borderColor = "#393E40"
+baseRadius = "small"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+codeFont = "JetBrains Mono:https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+
+[theme.sidebar]
+backgroundColor = "#1F2223"
+secondaryBackgroundColor = "#393E40"

@@ -45,13 +45,14 @@ securecare-claims/
 │   │   └── communicator.py      #   officer summary + claimant letter (+ automatic checks, template fallback)
 │   └── ui/                      # Streamlit widgets
 │       ├── sidebar.py           #   API-key box (the key-safety logic lives here)
+│       ├── brand.py             #   Supersek brand layer (logo, CSS, footer; constants only)
 │       ├── form.py              #   claim form bound to session_state
 │       ├── autofill.py          #   "paste your email" feature (every extracted value is clamped)
 │       ├── safe.py              #   escapes untrusted text before it is shown in banners / markdown
 │       ├── limits.py            #   per-session throttle for AI actions
 │       ├── results.py           #   result screen
 │       └── workflow_tab.py      #   live drawing of the compiled graph + About tab
-└── tests/                       # 274 tests: validation, schemas, rules, graph, communicator checks, security,
+└── tests/                       # 281 tests: validation, schemas, rules, graph, communicator checks, security,
                                  # text scanner, UI helpers, end-to-end UI (AppTest), deployment files
 ```
 
@@ -161,6 +162,22 @@ These behaviours are covered by tests in `tests/test_app_smoke.py`, `tests/test_
 > Do **not** put your own OpenRouter key in Streamlit secrets for a public app: every visitor would spend your credits.
 > If you need that later, add authentication and a per-user usage cap first.
 > Also avoid enabling LangSmith tracing on a public deployment: traces would contain claim details.
+
+## Branding (Supersek)
+
+The UI follows the Supersek brand template: dark background `#1F2223` with a subtle dot grid, Inter
+typography, uppercase tracked headings with the signature purple gradient, the SUPERSEK logo with its
+purple dot, and a footer.
+
+* Palette, fonts and radius live in `.streamlit/config.toml` (`[theme]`).
+* `securecare/ui/brand.py` holds the styles a theme cannot express. It is the **only** place that emits
+  raw HTML/CSS and it renders constants only, never user, AI or error text (enforced by `tests/test_brand.py`).
+* The workflow graph is drawn in brand colours (`securecare/graph/visualize.py`).
+* Deliberate adjustments for legibility: the gradient is used on H1/H2 only (small sub-headings stay solid),
+  interactive elements use Mid Purple `#7874EA` because Primary Purple `#221CD2` is too dark on the dark
+  background (the main button still uses `#221CD2`), and decorative emojis were removed for the understated tone.
+* Inter and JetBrains Mono load from Google Fonts, so visitors' browsers make a request to Google. To avoid that,
+  self-host the fonts with `[[theme.fontFaces]]` and `enableStaticServing`.
 
 ## Class build order (2 hours)
 

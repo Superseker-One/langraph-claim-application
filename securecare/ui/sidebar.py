@@ -61,7 +61,7 @@ def render_sidebar() -> Settings:
         del st.session_state[stale]            # make sure no old key survives in this session
 
     with st.sidebar:
-        st.header("🔐 OpenRouter access")
+        st.header("OpenRouter access")
         st.text_input(
             "OpenRouter API key", type="password", key=current, placeholder="sk-or-v1-...",
             help="Optional. Needed only for AI features: email autofill and AI-drafted letters.",
@@ -73,7 +73,7 @@ def render_sidebar() -> Settings:
         st.button("Clear key now", on_click=flush_api_key, width="stretch")
         model = st.selectbox("Model", MODEL_OPTIONS, index=MODEL_OPTIONS.index(DEFAULT_MODEL), key="model")
         st.caption(
-            "🔒 Your key exists only in **your** browser session. It is never saved, logged, cached "
+            "Your key exists only in **your** browser session. It is never saved, logged, cached "
             "or shared with other visitors, and it is erased after each use unless you tick *Keep*."
         )
         if not get_api_key():
